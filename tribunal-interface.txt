@@ -1,0 +1,222 @@
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.4;
+
+interface Tribunal {
+    struct Adjustment {
+        address adjuster;
+        uint256 fillIndex;
+        uint256 targetBlock;
+        uint256[] supplementalPriceCurve;
+        bytes32 validityConditions;
+        bytes adjustmentAuthorization;
+    }
+
+    struct ArgDetail {
+        string tokenPath;
+        string argPath;
+        string description;
+    }
+
+    struct BatchClaim {
+        BatchCompact compact;
+        bytes sponsorSignature;
+        bytes allocatorSignature;
+    }
+
+    struct BatchCompact {
+        address arbiter;
+        address sponsor;
+        uint256 nonce;
+        uint256 expires;
+        Lock[] commitments;
+    }
+
+    struct DispatchParameters {
+        uint256 chainId;
+        address target;
+        uint256 value;
+        bytes context;
+    }
+
+    struct DispositionDetails {
+        bytes32 claimant;
+        uint256 scalingFactor;
+    }
+
+    struct FillComponent {
+        address fillToken;
+        uint256 minimumFillAmount;
+        address recipient;
+        bool applyScaling;
+    }
+
+    struct FillParameters {
+        uint256 chainId;
+        address tribunal;
+        uint256 expires;
+        FillComponent[] components;
+        uint256 baselinePriorityFee;
+        uint256 scalingFactor;
+        uint256[] priceCurve;
+        RecipientCallback[] recipientCallback;
+        bytes32 salt;
+    }
+
+    struct FillRecipient {
+        uint256 fillAmount;
+        address recipient;
+    }
+
+    struct Lock {
+        bytes12 lockTag;
+        address token;
+        uint256 amount;
+    }
+
+    struct Mandate {
+        address adjuster;
+        FillParameters[] fills;
+    }
+
+    struct RecipientCallback {
+        uint256 chainId;
+        BatchCompact compact;
+        bytes32 mandateHash;
+        bytes context;
+    }
+
+    error AlreadyFilled();
+    error DispatchNotAvailable();
+    error InvalidAdjustment();
+    error InvalidChainId();
+    error InvalidCommitmentsArray();
+    error InvalidDispatchCallback();
+    error InvalidFillBlock();
+    error InvalidFillHashArguments();
+    error InvalidGasPrice();
+    error InvalidPriceCurveParameters();
+    error InvalidRecipientCallback();
+    error InvalidRecipientCallbackLength();
+    error InvalidTargetBlock(uint256 blockNumber, uint256 targetBlockNumber);
+    error InvalidTargetBlockDesignation();
+    error NotSponsor();
+    error PriceCurveBlocksExceeded();
+    error ReentrancyGuard();
+    error ValidityConditionsNotMet();
+
+    event Cancel(address indexed sponsor, bytes32 claimHash);
+    event Dispatch(
+        address indexed dispatchTarget, uint256 indexed chainId, bytes32 indexed claimant, bytes32 claimHash
+    );
+    event Fill(
+        address indexed sponsor,
+        bytes32 indexed claimant,
+        bytes32 claimHash,
+        FillRecipient[] fillRecipients,
+        uint256[] claimAmounts,
+        uint256 targetBlock
+    );
+    event FillWithClaim(
+        address indexed sponsor,
+        bytes32 indexed claimant,
+        bytes32 claimHash,
+        FillRecipient[] fillRecipients,
+        uint256[] claimAmounts,
+        uint256 targetBlock
+    );
+
+    receive() external payable;
+
+    function BASE_SCALING_FACTOR() external view returns (uint256);
+    function THE_COMPACT() external view returns (address);
+    function cancel(BatchCompact memory compact, bytes32 mandateHash) external returns (bytes32 claimHash);
+    function cancelAndDispatch(
+        BatchCompact memory compact,
+        bytes32 mandateHash,
+        DispatchParameters memory dispatchParams
+    ) external payable returns (bytes32 claimHash);
+    function claimAndFill(
+        BatchClaim memory claim,
+        FillParameters memory mandate,
+        Adjustment memory adjustment,
+        bytes32[] memory fillHashes,
+        bytes32 claimant,
+        uint256 fillBlock
+    )
+        external
+        payable
+        returns (bytes32 claimHash, bytes32 mandateHash, uint256[] memory fillAmounts, uint256[] memory claimAmounts);
+    function claimReductionScalingFactor(bytes32 claimHash) external view returns (uint256 scalingFactor);
+    function deriveAmounts(
+        Lock[] memory maximumClaimAmounts,
+        uint256[] memory priceCurve,
+        uint256 targetBlock,
+        uint256 fillBlock,
+        uint256 minimumFillAmount,
+        uint256 baselinePriorityFee,
+        uint256 scalingFactor
+    ) external view returns (uint256 fillAmount, uint256[] memory claimAmounts);
+    function deriveAmountsFromComponents(
+        Lock[] memory maximumClaimAmounts,
+        FillComponent[] memory components,
+        uint256[] memory priceCurve,
+        uint256 targetBlock,
+        uint256 fillBlock,
+        uint256 baselinePriorityFee,
+        uint256 scalingFactor
+    ) external view returns (uint256[] memory fillAmounts, uint256[] memory claimAmounts);
+    function deriveClaimHash(BatchCompact memory compact, bytes32 mandateHash) external pure returns (bytes32);
+    function deriveFillComponentHash(FillComponent memory component) external pure returns (bytes32);
+    function deriveFillComponentsHash(FillComponent[] memory components) external pure returns (bytes32);
+    function deriveFillHash(FillParameters memory targetFill) external view returns (bytes32);
+    function deriveFillsHash(FillParameters[] memory fills) external view returns (bytes32);
+    function deriveMandateHash(Mandate memory mandate) external view returns (bytes32);
+    function deriveRecipientCallbackHash(RecipientCallback[] memory recipientCallback) external pure returns (bytes32);
+    function dispatch(BatchCompact memory compact, bytes32 mandateHash, DispatchParameters memory dispatchParams)
+        external
+        payable
+        returns (bytes32 claimHash, uint256[] memory claimAmounts);
+    function extsload(bytes32 slot) external view returns (bytes32);
+    function extsload(bytes32[] memory slots) external view returns (bytes32[] memory);
+    function fill(
+        BatchCompact memory compact,
+        FillParameters memory mandate,
+        Adjustment memory adjustment,
+        bytes32[] memory fillHashes,
+        bytes32 claimant,
+        uint256 fillBlock
+    )
+        external
+        payable
+        returns (bytes32 claimHash, bytes32 mandateHash, uint256[] memory fillAmounts, uint256[] memory claimAmounts);
+    function fillAndDispatch(
+        BatchCompact memory compact,
+        FillParameters memory mandate,
+        Adjustment memory adjustment,
+        bytes32[] memory fillHashes,
+        bytes32 claimant,
+        uint256 fillBlock,
+        DispatchParameters memory dispatchParameters
+    )
+        external
+        payable
+        returns (bytes32 claimHash, bytes32 mandateHash, uint256[] memory fillAmounts, uint256[] memory claimAmounts);
+    function filled(bytes32 claimHash) external view returns (bytes32);
+    function getCompactWitnessDetails()
+        external
+        pure
+        returns (string memory witnessTypeString, ArgDetail[] memory details);
+    function getDispositionDetails(bytes32[] memory claimHashes)
+        external
+        view
+        returns (DispositionDetails[] memory details);
+    function name() external pure returns (string memory);
+    function reentrancyGuardStatus() external view returns (address lockHolder);
+    function settleOrRegister(
+        bytes32 sourceClaimHash,
+        BatchCompact memory compact,
+        bytes32 mandateHash,
+        address recipient,
+        bytes memory context
+    ) external payable returns (bytes32 registeredClaimHash);
+}
