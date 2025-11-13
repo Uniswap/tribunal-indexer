@@ -194,6 +194,123 @@ query GetMandateDetails($mandateHash: String!, $chainId: BigInt!) {
 }
 ```
 
+#### Get fill by claimHash (across all chains):
+```graphql
+query GetFillByClaimHash($claimHash: String!) {
+  fills(
+    where: { claimHash: { equals: $claimHash } }
+  ) {
+    items {
+      id
+      claimHash
+      chainId
+      sponsorAddress
+      fillerAddress
+      claimant
+      claimantLockTag
+      claimantRecipient
+      fillAmounts
+      claimAmounts
+      targetBlock
+      timestamp
+      transactionHash
+      mandate {
+        adjusterAddress
+        arbiterAddress
+      }
+    }
+  }
+}
+```
+
+#### Get fill by claimHash and chainId (specific fill):
+```graphql
+query GetFillByClaimHashAndChainId($claimHash: String!, $chainId: BigInt!) {
+  fills(
+    where: { 
+      claimHash: { equals: $claimHash }
+      chainId: { equals: $chainId }
+    }
+  ) {
+    items {
+      id
+      claimHash
+      chainId
+      sponsorAddress
+      fillerAddress
+      claimant
+      claimantLockTag
+      claimantRecipient
+      fillAmounts
+      claimAmounts
+      fillRecipients
+      targetBlock
+      timestamp
+      transactionHash
+      blockNumber
+      logIndex
+      arbiterAddress
+    }
+  }
+}
+```
+
+#### Get fill by composite ID directly:
+```graphql
+query GetFillById($id: String!) {
+  fill(id: $id) {
+    id
+    claimHash
+    chainId
+    sponsorAddress
+    fillerAddress
+    claimant
+    claimantLockTag
+    claimantRecipient
+    fillAmounts
+    claimAmounts
+    fillRecipients
+    targetBlock
+    timestamp
+    transactionHash
+    blockNumber
+    logIndex
+    arbiterAddress
+    mandate {
+      mandateHash
+      sponsorAddress
+      adjusterAddress
+      arbiterAddress
+    }
+  }
+}
+```
+**Note**: The `id` format is `${claimHash}-${chainId}`, e.g., `"0x1234...abcd-1"` for claim hash `0x1234...abcd` on chain ID `1`.
+
+#### Get all fills on a specific chain:
+```graphql
+query GetFillsByChainId($chainId: BigInt!) {
+  fills(
+    where: { chainId: { equals: $chainId } }
+    orderBy: "timestamp"
+    orderDirection: "DESC"
+    limit: 100
+  ) {
+    items {
+      id
+      claimHash
+      chainId
+      sponsorAddress
+      fillerAddress
+      fillAmounts
+      claimAmounts
+      timestamp
+      transactionHash
+    }
+  }
+}
+```
+
 ## Database Schema
 
 The indexer uses the following main entities:

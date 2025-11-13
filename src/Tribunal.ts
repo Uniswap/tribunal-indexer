@@ -13,6 +13,8 @@ interface TransactionDetails {
   adjusterAddress: Address;
   arbiterAddress: Address;
   mandateHash: Hex;
+  originalMinimumFillAmounts?: bigint[];
+  originalMaximumClaimAmounts?: bigint[];
 }
 
 interface FillComponent {
@@ -257,11 +259,23 @@ function parseTransactionInput(txInput: Hex): TransactionDetails | null {
 
       const mandateHash = computeMandateHash(mandateStruct);
 
+      // Extract original minimum fill amounts from mandate components
+      const originalMinimumFillAmounts = mandate.components.map(
+        (c) => c.minimumFillAmount
+      );
+
+      // Extract original maximum claim amounts from compact commitments
+      const originalMaximumClaimAmounts = compact.commitments.map(
+        (l) => l.amount
+      );
+
       return {
         sponsorAddress: compact.sponsor,
         adjusterAddress: adjustment.adjuster,
         arbiterAddress: compact.arbiter,
         mandateHash,
+        originalMinimumFillAmounts,
+        originalMaximumClaimAmounts,
       };
     } else if (functionName === "claimAndFill") {
       const claim = decoded.args[0] as any;
@@ -276,11 +290,23 @@ function parseTransactionInput(txInput: Hex): TransactionDetails | null {
 
       const mandateHash = computeMandateHash(mandateStruct);
 
+      // Extract original minimum fill amounts from mandate components
+      const originalMinimumFillAmounts = mandate.components.map(
+        (c) => c.minimumFillAmount
+      );
+
+      // Extract original maximum claim amounts from compact commitments
+      const originalMaximumClaimAmounts = compact.commitments.map(
+        (l) => l.amount
+      );
+
       return {
         sponsorAddress: compact.sponsor,
         adjusterAddress: adjustment.adjuster,
         arbiterAddress: compact.arbiter,
         mandateHash,
+        originalMinimumFillAmounts,
+        originalMaximumClaimAmounts,
       };
     } else if (
       functionName === "cancel" ||
@@ -366,6 +392,48 @@ function decodeClaimant(claimant: string): {
 }
 
 /**
+ * Calculates price improvement percentage
+ * For fills: positive values indicate filler received more than minimum
+ * For claims: positive values indicate claimant paid less than maximum (better deal)
+ * @param original - Original amount (minimum for fills, maximum for claims)
+ * @param realized - Realized amount (actual fill or claim amount)
+ * @param isClaim - Whether this is a claim amount (inverts the calculation)
+ * @returns Price improvement as a string percentage (e.g., "10.5" for 10.5%)
+ */
+function calculatePriceImprovement(
+  original: bigint,
+  realized: bigint,
+  isClaim: boolean = false
+): string {
+  // Avoid division by zero
+  if (original === 0n) {
+    return "0";
+  }
+
+  // Calculate percentage difference
+  // For fills: ((realized - minimum) / minimum) * 100
+  // For claims: ((maximum - realized) / maximum) * 100
+  let improvement: bigint;
+  
+  if (isClaim) {
+    // For claims, improvement is when realized is less than maximum
+    improvement = ((original - realized) * 10000n) / original;
+  } else {
+    // For fills, improvement is when realized is more than minimum
+    improvement = ((realized - original) * 10000n) / original;
+  }
+
+  // Convert to decimal string with 2 decimal places
+  const isNegative = improvement < 0n;
+  const absImprovement = isNegative ? -improvement : improvement;
+  const wholePart = absImprovement / 100n;
+  const decimalPart = absImprovement % 100n;
+  
+  const result = `${wholePart}.${decimalPart.toString().padStart(2, "0")}`;
+  return isNegative ? `-${result}` : result;
+}
+
+/**
  * Updates chain statistics
  */
 async function updateChainStatistics(
@@ -415,7 +483,7 @@ async function updateChainStatistics(
 // FILL EVENT HANDLER
 // ============================================================================
 
-ponder.on("Tribunal:Fill", async ({ event, context }: any) => {
+ponder.on("Tribunal:Fill", async ({ event, context }) => {
   const { db } = context;
   const { sponsor, claimant, claimHash, fillRecipients, claimAmounts, targetBlock } =
     event.args;
@@ -476,6 +544,25 @@ ponder.on("Tribunal:Fill", async ({ event, context }: any) => {
   // Extract fillAmounts from fillRecipients
   const fillAmounts = fillRecipients.map((r: any) => r.fillAmount);
 
+  // Get original amounts from parsed transaction
+  const originalMinimumFillAmounts =
+    parsed.originalMinimumFillAmounts || [];
+  const originalMaximumClaimAmounts =
+    parsed.originalMaximumClaimAmounts || [];
+
+  // Calculate price improvements
+  const fillPriceImprovements = fillAmounts.map((realized: bigint, i: number) => {
+    const original = originalMinimumFillAmounts[i];
+    return original ? calculatePriceImprovement(original, realized, false) : "0";
+  });
+
+  const claimPriceImprovements = claimAmounts.map(
+    (realized: bigint, i: number) => {
+      const original = originalMaximumClaimAmounts[i];
+      return original ? calculatePriceImprovement(original, realized, true) : "0";
+    }
+  );
+
   // Insert fill record
   const fillId = `${claimHash}-${chainId}`;
   await db.insert(schema.fill).values({
@@ -487,8 +574,16 @@ ponder.on("Tribunal:Fill", async ({ event, context }: any) => {
     fillerAddress,
     claimant,
     targetBlock,
+    originalMinimumFillAmounts: JSON.stringify(
+      originalMinimumFillAmounts.map(String)
+    ),
+    originalMaximumClaimAmounts: JSON.stringify(
+      originalMaximumClaimAmounts.map(String)
+    ),
     fillAmounts: JSON.stringify(fillAmounts.map(String)),
     claimAmounts: JSON.stringify(claimAmounts.map(String)),
+    fillPriceImprovements: JSON.stringify(fillPriceImprovements),
+    claimPriceImprovements: JSON.stringify(claimPriceImprovements),
     fillRecipients: fillRecipientsJson,
     claimantLockTag: lockTag,
     claimantRecipient: recipient,
@@ -507,7 +602,7 @@ ponder.on("Tribunal:Fill", async ({ event, context }: any) => {
 // FILL WITH CLAIM EVENT HANDLER
 // ============================================================================
 
-ponder.on("Tribunal:FillWithClaim", async ({ event, context }: any) => {
+ponder.on("Tribunal:FillWithClaim", async ({ event, context }) => {
   const { db } = context;
   const { sponsor, claimant, claimHash, fillRecipients, claimAmounts, targetBlock } =
     event.args;
@@ -568,6 +663,25 @@ ponder.on("Tribunal:FillWithClaim", async ({ event, context }: any) => {
   // Extract fillAmounts from fillRecipients
   const fillAmounts = fillRecipients.map((r: any) => r.fillAmount);
 
+  // Get original amounts from parsed transaction
+  const originalMinimumFillAmounts =
+    parsed.originalMinimumFillAmounts || [];
+  const originalMaximumClaimAmounts =
+    parsed.originalMaximumClaimAmounts || [];
+
+  // Calculate price improvements
+  const fillPriceImprovements = fillAmounts.map((realized: bigint, i: number) => {
+    const original = originalMinimumFillAmounts[i];
+    return original ? calculatePriceImprovement(original, realized, false) : "0";
+  });
+
+  const claimPriceImprovements = claimAmounts.map(
+    (realized: bigint, i: number) => {
+      const original = originalMaximumClaimAmounts[i];
+      return original ? calculatePriceImprovement(original, realized, true) : "0";
+    }
+  );
+
   // Insert fill record (use different ID to avoid collision with regular Fill events)
   const fillId = `${claimHash}-${chainId}-claim`;
   await db
@@ -581,8 +695,16 @@ ponder.on("Tribunal:FillWithClaim", async ({ event, context }: any) => {
       fillerAddress,
       claimant,
       targetBlock,
+      originalMinimumFillAmounts: JSON.stringify(
+        originalMinimumFillAmounts.map(String)
+      ),
+      originalMaximumClaimAmounts: JSON.stringify(
+        originalMaximumClaimAmounts.map(String)
+      ),
       fillAmounts: JSON.stringify(fillAmounts.map(String)),
       claimAmounts: JSON.stringify(claimAmounts.map(String)),
+      fillPriceImprovements: JSON.stringify(fillPriceImprovements),
+      claimPriceImprovements: JSON.stringify(claimPriceImprovements),
       fillRecipients: fillRecipientsJson,
       claimantLockTag: lockTag,
       claimantRecipient: recipient,
@@ -602,7 +724,7 @@ ponder.on("Tribunal:FillWithClaim", async ({ event, context }: any) => {
 // CANCEL EVENT HANDLER
 // ============================================================================
 
-ponder.on("Tribunal:Cancel", async ({ event, context }: any) => {
+ponder.on("Tribunal:Cancel", async ({ event, context }) => {
   const { db } = context;
   const { sponsor, claimHash } = event.args;
 
@@ -653,7 +775,7 @@ ponder.on("Tribunal:Cancel", async ({ event, context }: any) => {
 // DISPATCH EVENT HANDLER (Optional)
 // ============================================================================
 
-ponder.on("Tribunal:Dispatch", async ({ event, context }: any) => {
+ponder.on("Tribunal:Dispatch", async ({ event, context }) => {
   const { db } = context;
   const { dispatchTarget, chainId: targetChainId, claimant, claimHash } = event.args;
 
